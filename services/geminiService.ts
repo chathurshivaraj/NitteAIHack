@@ -1,153 +1,134 @@
-// Fix: Import GoogleGenAI and Type according to guidelines
 import { GoogleGenAI, Type } from "@google/genai";
-// Fix: Import necessary types from the local types file
-import { CandidateAnalysis, LearningPath, SkillQuestion } from "../types";
+import { CandidateStatus, CandidateAnalysis, CompanyPerk } from "../types";
 
-// Fix: Initialize GoogleGenAI with a named apiKey parameter as required
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+// FIX: Initialize GoogleGenAI with a named apiKey parameter as per the guidelines.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Helper function for JSON responses to avoid repetition and ensure correct model usage
-const generateContentWithJson = async (prompt: string, schema: any) => {
-    // Fix: Use ai.models.generateContent for querying GenAI with the correct model
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-            responseMimeType: "application/json",
-            responseSchema: schema,
+const analysisSchema = {
+    type: Type.OBJECT,
+    properties: {
+        summary: { type: Type.STRING, description: "A concise summary of the candidate's profile and suitability for the role." },
+        skills: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "A list of key technical and soft skills."
         },
-    });
-
-    try {
-        // Fix: Use response.text to directly access the generated text content
-        const jsonText = response.text.trim();
-        return JSON.parse(jsonText);
-    } catch (e) {
-        console.error("Failed to parse JSON response:", response.text);
-        throw new Error("Invalid JSON response from AI model.");
-    }
-};
-
-export const analyzeResume = async (resumeText: string, jobRole: string): Promise<CandidateAnalysis & { recommendedAction: string; actionJustification: string; }> => {
-    const prompt = `Analyze the following resume for a "${jobRole}" position.
-    
-    Resume Text:
-    ---
-    ${resumeText}
-    ---
-
-    Based on the resume and job role, provide the following in JSON format:
-    1. A concise summary of the candidate's profile.
-    2. A list of key skills (maximum 8).
-    3. Total years of relevant experience.
-    4. A summary of their education.
-    5. A "fit score" from 1 to 10, where 10 is a perfect fit for the role.
-    6. A recommended next action (e.g., "Request Skill Check", "Shortlist for Interview", "Proceed to final interview", "Reject").
-    7. A brief justification for the recommended action.
-    `;
-
-    const schema = {
-        type: Type.OBJECT,
-        properties: {
-            summary: { type: Type.STRING, description: "Concise summary of the candidate's profile." },
-            skills: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "List of key skills (maximum 8)."
-            },
-            experienceYears: { type: Type.NUMBER, description: "Total years of relevant experience." },
-            education: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "Summary of their education."
-            },
-            fitScore: { type: Type.NUMBER, description: "Fit score from 1 to 10." },
-            recommendedAction: { type: Type.STRING, description: "Recommended next action for the recruiter." },
-            actionJustification: { type: Type.STRING, description: "Brief justification for the recommendation." }
+        experienceYears: { type: Type.NUMBER, description: "Total years of relevant professional experience." },
+        education: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "A list of degrees or educational qualifications."
         },
-        required: ["summary", "skills", "experienceYears", "education", "fitScore", "recommendedAction", "actionJustification"],
-    };
-
-    const result = await generateContentWithJson(prompt, schema);
-    
-    return result as CandidateAnalysis & { recommendedAction: string; actionJustification: string; };
-};
-
-
-export const generateAnonymizedResume = async (resumeText: string): Promise<string> => {
-    const prompt = `Anonymize the following resume text by removing all personally identifiable information (PII) such as name, email, phone number, address, and links to personal profiles (like LinkedIn, GitHub, portfolio). Replace the name with "[Candidate]".
-
-    Original Resume:
-    ---
-    ${resumeText}
-    ---
-    
-    Return only the anonymized text.
-    `;
-    // Fix: Use ai.models.generateContent for querying GenAI
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-    });
-    // Fix: Use response.text to directly access the generated text content
-    return response.text;
-};
-
-export const generateSkillCheck = async (jobRole: string, skills: string[]): Promise<SkillQuestion[]> => {
-    const prompt = `Create a skill check quiz for a "${jobRole}" position, focusing on these skills: ${skills.join(', ')}.
-    Generate 5 multiple-choice questions. For each question, provide 4 options and indicate the correct answer's index (0-3).
-    `;
-
-    const schema = {
-        type: Type.ARRAY,
-        items: {
-            type: Type.OBJECT,
-            properties: {
-                question: { type: Type.STRING, description: "The question text." },
-                options: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                    description: "An array of 4 possible answers."
+        fitScore: { type: Type.NUMBER, description: "A score from 1-10 indicating the candidate's fit for the role." },
+        workHistory: {
+            type: Type.ARRAY,
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    title: { type: Type.STRING },
+                    company: { type: Type.STRING },
+                    industry: { type: Type.STRING, description: "The industry sector of the company (e.g., 'Tech', 'Finance')." },
+                    startDate: { type: Type.STRING, description: "Format: YYYY-MM" },
+                    endDate: { type: Type.STRING, description: "Format: YYYY-MM or 'Present'" },
+                    description: { type: Type.STRING, description: "Brief description of responsibilities and achievements." }
                 },
-                correctAnswerIndex: { type: Type.NUMBER, description: "The 0-based index of the correct answer in the options array." }
-            },
-            required: ["question", "options", "correctAnswerIndex"]
+                required: ['title', 'company', 'startDate', 'endDate', 'description']
+            }
+        },
+        recommendedAction: { type: Type.STRING, description: "The single most appropriate next step for this candidate (e.g., 'Request Skill Check', 'Shortlist for Interview', 'Reject')." },
+        actionJustification: { type: Type.STRING, description: "A brief, one-sentence justification for the recommended action." }
+    },
+    required: ['summary', 'skills', 'experienceYears', 'education', 'fitScore', 'workHistory', 'recommendedAction', 'actionJustification']
+};
+
+type AnalysisResult = CandidateAnalysis & {
+    recommendedAction: string;
+    actionJustification: string;
+}
+
+export async function analyzeResume(jobRole: string, resume: { text: string } | { images: { mimeType: string, data: string }[] }): Promise<AnalysisResult> {
+    const prompt = `Analyze the following resume for a "${jobRole}" position. Extract key information and assess the candidate's suitability. If multiple images are provided, they represent pages of a single document; combine their content for the analysis.`;
+
+    const contents = 'text' in resume
+        ? [ { text: prompt }, { text: resume.text } ]
+        : [ { text: prompt }, ...resume.images.map(image => ({ inlineData: image })) ];
+
+    const response = await ai.models.generateContent({
+        // FIX: Use the 'gemini-2.5-flash' model as specified in the guidelines.
+        model: 'gemini-2.5-flash',
+        contents: { parts: contents },
+        config: {
+            responseMimeType: 'application/json',
+            responseSchema: analysisSchema,
         }
-    };
+    });
+
+    const resultJson = response.text.trim();
+    return JSON.parse(resultJson);
+}
+
+export async function extractTextFromImages(images: { mimeType: string, data: string }[]): Promise<string> {
+    const prompt = "These images are pages of a resume. Extract all the text from them, preserving the original formatting and order as much as possible, to reconstruct the full resume text.";
     
-    const result = await generateContentWithJson(prompt, schema);
-    return result as SkillQuestion[];
-};
+    const contents = [ { text: prompt }, ...images.map(image => ({ inlineData: image })) ];
 
-export const suggestLearningPath = async (jobRole: string, weakSkills: string[]): Promise<LearningPath[]> => {
-    const prompt = `For a candidate applying for a "${jobRole}" role who has shown weakness in the following skills: ${weakSkills.join(', ')}, suggest a learning path.
-    For each skill, provide 2-3 learning resources (articles, videos, courses) with a title, a valid URL, and the type of resource.
-    `;
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: { parts: contents },
+    });
+    
+    return response.text.trim();
+}
 
-    const schema = {
-        type: Type.ARRAY,
-        items: {
-            type: Type.OBJECT,
-            properties: {
-                skill: { type: Type.STRING, description: "The skill to improve." },
-                resources: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            title: { type: Type.STRING, description: "Title of the learning resource." },
-                            url: { type: Type.STRING, description: "URL of the resource." },
-                            type: { type: Type.STRING, description: "Type of resource (e.g., Article, Video, Course)." }
-                        },
-                        required: ["title", "url", "type"]
-                    },
-                    description: "List of learning resources for the skill."
-                }
-            },
-            required: ["skill", "resources"]
+export async function generateAnonymizedResume(resumeText: string): Promise<string> {
+    const response = await ai.models.generateContent({
+        // FIX: Use the 'gemini-2.5-flash' model as specified in the guidelines.
+        model: 'gemini-2.5-flash',
+        contents: `Anonymize the following resume text by removing all personally identifiable information (PII) such as name, email, phone number, and address. Replace the name with "[Candidate]". Do not remove company names or schools.\n\n---\n\n${resumeText}`,
+    });
+    return response.text.trim();
+}
+
+export async function generateStatusChangeEmail(candidateName: string, role: string, newStatus: CandidateStatus): Promise<{ subject: string, body: string }> {
+    const response = await ai.models.generateContent({
+        // FIX: Use the 'gemini-2.5-flash' model as specified in the guidelines.
+        model: 'gemini-2.5-flash',
+        contents: `Generate a professional and friendly email to a job candidate named ${candidateName} about their application for the ${role} position. The new status is "${newStatus}". Return a JSON object with "subject" and "body" fields. The tone should be encouraging, even if the status is a rejection.`,
+        config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    subject: { type: Type.STRING },
+                    body: { type: Type.STRING }
+                },
+                required: ['subject', 'body']
+            }
         }
-    };
+    });
+    return JSON.parse(response.text.trim());
+}
 
-    const result = await generateContentWithJson(prompt, schema);
-    return result as LearningPath[];
-};
+
+export async function generateCompanyPerks(role: string): Promise<CompanyPerk[]> {
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `Generate a list of 4 appealing and role-specific company perks for a "${role}" position. For each perk, provide a title, a short description, and an icon name. The allowed icon names are "Trophy", "Gift", "ClipboardDocumentCheck", and "ChatBubbleLeftRight".`,
+        config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        icon: { type: Type.STRING },
+                        title: { type: Type.STRING },
+                        description: { type: Type.STRING }
+                    },
+                    required: ['icon', 'title', 'description']
+                }
+            }
+        }
+    });
+    return JSON.parse(response.text.trim());
+}

@@ -1,10 +1,12 @@
 import React, { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
 import { Candidate, CandidateStatus } from '../types';
 import { analyzeResume, generateAnonymizedResume } from '../services/geminiService';
 import CandidateDetail from './CandidateDetail';
 import Spinner from './Spinner';
-import { UploadIcon } from './icons';
+import Toast from './Toast';
+import EmailNotificationModal from './EmailNotificationModal';
+import { SparklesIcon } from './icons';
+import StatisticsDashboard from './StatisticsDashboard';
 
 interface RecruiterDashboardProps {
   candidates: Candidate[];
@@ -22,118 +24,97 @@ const statusColors: { [key in CandidateStatus]: string } = {
   [CandidateStatus.Rejected]: "bg-red-100 text-red-800",
 };
 
+type NotificationInfo = {
+    candidate: Candidate;
+    status: CandidateStatus;
+};
+
 const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({ candidates, setCandidates, onSendSkillCheck }) => {
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
-  const [jobRole, setJobRole] = useState('Senior React Developer');
+  const [notificationInfo, setNotificationInfo] = useState<NotificationInfo | null>(null);
+  const [toastMessage, setToastMessage] = useState<string>('');
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    const file = acceptedFiles[0];
-    if (!file) return;
-
-    setIsProcessing(true);
-    setError(null);
+  const handleAnalyze = async (candidateId: string) => {
+    setAnalyzingId(candidateId);
+    const candidate = candidates.find(c => c.id === candidateId);
+    if (!candidate || (!candidate.resumeText && !candidate.resumeImages)) {
+        setToastMessage('Cannot analyze: Resume data is missing.');
+        setAnalyzingId(null);
+        return;
+    }
 
     try {
-      const resumeText = await file.text();
-      // Assuming PDF/DOCX parsing is handled by a library that extracts text.
-      // For simplicity, this example will work best with .txt files.
-      const analysisResult = await analyzeResume(resumeText, jobRole);
-      const anonymizedResume = await generateAnonymizedResume(resumeText);
-      
-      const newCandidate: Candidate = {
-        id: `cand-${Date.now()}`,
-        name: `Candidate ${candidates.length + 1}`, // Anonymized until recruiter fills it in
-        email: 'tbd@example.com',
-        role: jobRole,
-        status: CandidateStatus.New,
-        appliedDate: new Date().toISOString().split('T')[0],
-        analysis: {
-            summary: analysisResult.summary,
-            skills: analysisResult.skills,
-            experienceYears: analysisResult.experienceYears,
-            education: analysisResult.education,
-            fitScore: analysisResult.fitScore
-        },
-        resumeText: resumeText,
-        anonymizedResumeText: anonymizedResume,
-        recommendedAction: analysisResult.recommendedAction,
-        actionJustification: analysisResult.actionJustification,
-        auditLog: [{ timestamp: new Date().toISOString(), action: 'Resume Uploaded', details: `AI analysis completed for ${jobRole} role.` }]
-      };
-      
-      setCandidates(prev => [newCandidate, ...prev]);
+        // Prefer using multimodal analysis with images if they exist, otherwise fall back to text.
+        const resumeInput = candidate.resumeImages && candidate.resumeImages.length > 0
+            ? { images: candidate.resumeImages }
+            : { text: candidate.resumeText! }; // The check above guarantees one of them exists.
 
+        const analysisResult = await analyzeResume(candidate.role, resumeInput);
+        
+        // The resumeText is required for anonymization and is guaranteed to be extracted even from images.
+        const anonymizedResume = await generateAnonymizedResume(candidate.resumeText!);
+        
+        setCandidates(prev => prev.map(c => 
+            c.id === candidateId ? {
+                ...c,
+                analysis: {
+                    summary: analysisResult.summary,
+                    skills: analysisResult.skills,
+                    experienceYears: analysisResult.experienceYears,
+                    education: analysisResult.education,
+                    fitScore: analysisResult.fitScore,
+                    workHistory: analysisResult.workHistory,
+                },
+                anonymizedResumeText: anonymizedResume,
+                recommendedAction: analysisResult.recommendedAction,
+                actionJustification: analysisResult.actionJustification,
+                auditLog: [...c.auditLog, { timestamp: new Date().toISOString(), action: 'Resume Analyzed', details: `AI analysis completed by recruiter.` }]
+            } : c
+        ));
+        setToastMessage(`Analysis complete for ${candidate.name}!`);
     } catch (err) {
-      console.error(err);
-      setError("Failed to analyze resume. Please try again.");
+        console.error("Analysis failed:", err);
+        setToastMessage(`Analysis failed for ${candidate.name}.`);
     } finally {
-      setIsProcessing(false);
+        setAnalyzingId(null);
     }
-  }, [jobRole, setCandidates, candidates.length]);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: { 
-        'text/plain': ['.txt'], 
-        // Note: Parsing .pdf and .docx to text would require additional libraries.
-        // This example handles .txt files correctly.
-    },
-    maxFiles: 1,
-    multiple: false,
-  });
-
-  const handleStatusChange = (candidateId: string, status: CandidateStatus) => {
-      setCandidates(prev => prev.map(c => c.id === candidateId ? { 
-          ...c, 
-          status,
-          auditLog: [...c.auditLog, { timestamp: new Date().toISOString(), action: 'Status Changed', details: `Status updated to ${status}` }]
-        } : c));
-      setSelectedCandidate(prev => prev && prev.id === candidateId ? { ...prev, status } : prev);
   };
 
+  const handleStatusChange = (candidateId: string, status: CandidateStatus) => {
+      const candidate = candidates.find(c => c.id === candidateId);
+      if(candidate) {
+        setNotificationInfo({ candidate, status });
+      }
+  };
+
+  const handleSendNotification = (subject: string, body: string) => {
+    if (!notificationInfo) return;
+
+    const { candidate, status } = notificationInfo;
+
+    console.log(`Email sent to ${candidate.email}`, { subject, body });
+
+    setCandidates(prev => prev.map(c => c.id === candidate.id ? { 
+        ...c, 
+        status,
+        auditLog: [
+            ...c.auditLog, 
+            { timestamp: new Date().toISOString(), action: 'Status Changed', details: `Status updated to ${status}` },
+            { timestamp: new Date().toISOString(), action: 'Email Sent', details: `Status update email sent to candidate.` }
+        ]
+      } : c));
+      
+    setSelectedCandidate(prev => prev && prev.id === candidate.id ? { ...prev, status } : prev);
+    setToastMessage(`Email sent to ${candidate.name}!`);
+  };
 
   return (
     <div className="container mx-auto p-4 sm:p-6 lg:p-8">
-      {/* Upload Section */}
-      <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
-        <h2 className="text-xl font-semibold mb-2">Analyze a New Candidate</h2>
-        <div className="flex items-center space-x-4 mb-4">
-            <label htmlFor="jobRole" className="font-medium">Applying for role:</label>
-            <input 
-                type="text" 
-                id="jobRole"
-                value={jobRole}
-                onChange={(e) => setJobRole(e.target.value)}
-                className="p-2 border rounded-md bg-gray-50 dark:bg-gray-700 dark:border-gray-600 focus:ring-2 focus:ring-indigo-500"
-            />
-        </div>
-        <div
-          {...getRootProps()}
-          className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
-            isDragActive ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-900/50' : 'border-gray-300 dark:border-gray-600 hover:border-indigo-500'
-          }`}
-        >
-          <input {...getInputProps()} />
-          {isProcessing ? (
-            <div className="flex flex-col items-center">
-              <Spinner />
-              <p className="mt-2 text-gray-600 dark:text-gray-400">Analyzing resume...</p>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center">
-              <UploadIcon className="w-12 h-12 text-gray-400 mb-2" />
-              <p className="text-gray-600 dark:text-gray-400">
-                {isDragActive ? 'Drop the resume here...' : 'Drag & drop a resume here, or click to select a file'}
-              </p>
-              <p className="text-xs text-gray-500">.txt supported</p>
-            </div>
-          )}
-        </div>
-        {error && <p className="text-red-500 mt-4">{error}</p>}
-      </div>
+      {toastMessage && <Toast message={toastMessage} onClose={() => setToastMessage('')} />}
 
+      <StatisticsDashboard candidates={candidates} />
+      
       {/* Candidates List */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
         <div className="p-6">
@@ -165,9 +146,21 @@ const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({ candidates, set
                             {candidate.status}
                         </span>
                     </td>
-                    <td className="px-6 py-4 space-x-2">
+                    <td className="px-6 py-4 space-x-2 whitespace-nowrap">
                         <button onClick={() => setSelectedCandidate(candidate)} className="font-medium text-indigo-600 dark:text-indigo-500 hover:underline">View</button>
-                        {(candidate.status === CandidateStatus.New || (candidate.recommendedAction === 'Request Skill Check' && candidate.status !== CandidateStatus.SkillCheckPending && candidate.status !== CandidateStatus.SkillCheckCompleted)) && (
+                        
+                        {(candidate.resumeText || candidate.resumeImages) && !candidate.analysis && (
+                             <button 
+                                onClick={() => handleAnalyze(candidate.id)} 
+                                disabled={analyzingId === candidate.id} 
+                                className="inline-flex items-center font-medium text-blue-600 dark:text-blue-500 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {analyzingId === candidate.id ? <Spinner size="sm" /> : <SparklesIcon className="w-4 h-4 mr-1" />}
+                                {analyzingId === candidate.id ? 'Analyzing...' : 'Analyze'}
+                            </button>
+                        )}
+
+                        {candidate.analysis && (candidate.status === CandidateStatus.New || (candidate.recommendedAction === 'Request Skill Check' && candidate.status !== CandidateStatus.SkillCheckPending && candidate.status !== CandidateStatus.SkillCheckCompleted)) && (
                             <button onClick={() => onSendSkillCheck(candidate.id)} className="font-medium text-green-600 dark:text-green-500 hover:underline">Send Skill Check</button>
                         )}
                     </td>
@@ -182,6 +175,14 @@ const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({ candidates, set
             candidate={selectedCandidate}
             onClose={() => setSelectedCandidate(null)}
             onStatusChange={handleStatusChange}
+        />
+      )}
+      {notificationInfo && (
+        <EmailNotificationModal 
+            candidate={notificationInfo.candidate}
+            newStatus={notificationInfo.status}
+            onSend={handleSendNotification}
+            onClose={() => setNotificationInfo(null)}
         />
       )}
     </div>
